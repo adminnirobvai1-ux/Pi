@@ -1,233 +1,171 @@
+import asyncio
 import json
-import os
-import secrets
-import threading
-import time
-from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlparse
+import random
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+from telethon.errors import FloodWaitError
+from telethon.tl.functions.channels import GetFullChannelRequest
+from telethon.tl.functions.phone import (
+    CreateGroupCallRequest,
+    JoinGroupCallRequest,
+    GetGroupCallRequest,
+    GetGroupParticipantsRequest,
+    EditGroupCallParticipantRequest,
+    DiscardGroupCallRequest,
+    LeaveGroupCallRequest
+)
+from telethon.tl.types import InputGroupCall, DataJSON, InputPeerUser, PeerUser
 
-DB_FILE = "panels.json"
-HOST = "0.0.0.0"
-PORT = 8080
+# ক্রেডেনশিয়াল ও সেশন টোকেন
+API_ID = 32054831
+API_HASH = "89fc23d0ff6763a53004996fe0c6cab2"
+SESSION_STRING = "1BVtsOMMBu1WGKCnjA_joyvpHQy2oQ3Y9P0Ncgf8JM7OtAkvKxMTPljd1Sg-viJEMP9rPKZynCFNcI5tbaKL25zRHAneu4rcPCC89ninLD0GnYqY35MsFaT-beg9mIrJBiGqiBznlKs4RNwZHMesqMhryDEpNZRa48pzCUUihR05tcJr5L07ooNhPIOPjYC8sSWYa1SNpO68XgeCtbwoJ31EoQvEPP4FcSuDZoLZvaEasK_UV89hf-QZir-x1aPrtfjcmaY2VtutW8Wql5xK-QocrxmopEN4iY_5hxW43YNmC4BY-4p88FfBfQuPWZD3ivs-5Pd1nV5lKwhnRto1Ukp36FMcsrGc="
+TARGET_CHANNEL = "DARK67HACK"
 
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-def load_data():
-    if not os.path.exists(DB_FILE):
-        return {}
-    with open(DB_FILE, "r") as f:
-        return json.load(f)
+def make_sdp():
+    s  = random.randint(100000000, 4294967295)
+    s2 = random.randint(100000000, 4294967295)
+    fp = ':'.join(f'{random.randint(0,255):02X}' for _ in range(32))
+    pw = ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=22))
+    uf = ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=8))
+    cn = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))
+    ms = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=36))
+    return json.dumps({
+        "fingerprints": [{"hash": "sha-256", "setup": "actpass", "fingerprint": fp}],
+        "pwd": pw, "ufrag": uf, "ssrc": s,
+        "ssrc-groups": [{"semantics": "FID", "sources": [s, s2]}],
+        "sources": {str(s): {"cname": cn, "msid": f"{ms} {ms}a0"}},
+    })
 
+async def join_live(call_input):
+    me = await client.get_me()
+    join_as = await client.get_input_entity(me)
+    for _ in range(3):
+        try:
+            await client(JoinGroupCallRequest(
+                call=call_input,
+                join_as=join_as,
+                muted=False,
+                video_stopped=True,
+                params=DataJSON(data=make_sdp())
+            ))
+            return True
+        except Exception as e:
+            if "already" in str(e).lower():
+                return True
+            await asyncio.sleep(1)
+    return False
 
-def save_data(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+async def main():
+    await client.start()
+    me = await client.get_me()
+    print(f">> স্ট্রিং টোকেন দিয়ে লগইন সফল: {me.first_name} (ID: {me.id})")
 
-
-# Web Server Handler for Terminal Links
-class TerminalHTTPHandler(BaseHTTPRequestHandler):
-
-    def do_GET(self):
-        parsed_path = urlparse(self.path)
-        path_parts = parsed_path.path.strip("/").split("/")
-
-        if len(path_parts) == 2 and path_parts[0] == "terminal":
-            token = path_parts[1]
-            panels = load_data()
-
-            if token in panels:
-                panel = panels[token]
-                expiry_time = datetime.strptime(
-                    panel["expiry"], "%Y-%m-%d %H:%M:%S"
-                )
-
-                if datetime.now() > expiry_time:
-                    self.send_response(403)
-                    self.send_header("Content-type", "text/html; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(
-                        "<h2>❌ এই লিংকটির মেয়াদ শেষ হয়ে গেছে! (Access Expired)</h2>".encode(
-                            "utf-8"
-                        )
-                    )
-                else:
-                    self.send_response(200)
-                    self.send_header("Content-type", "text/html; charset=utf-8")
-                    self.end_headers()
-                    html_content = f"""
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <title>Web Terminal Panel</title>
-                        <style>
-                            body {{ background-color: #1e1e1e; color: #00ff00; font-family: monospace; padding: 20px; }}
-                            .info {{ background: #2d2d2d; padding: 15px; border-radius: 5px; color: #fff; margin-bottom: 20px; }}
-                        </style>
-                    </head>
-                    <body>
-                        <div class="info">
-                            <h3>✅ টার্মিনাল এক্সেস সচল রয়েছে</h3>
-                            <p><b>User:</b> {panel['username']}</p>
-                            <p><b>Storage Limit:</b> {panel['storage']} GB</p>
-                            <p><b>Expires On:</b> {panel['expiry']}</p>
-                        </div>
-                        <hr>
-                        <div id="terminal">
-                            <p>Connecting to Web Terminal Session...</p>
-                            <p><i>[এখানে আসল Shell/xterm.js ইন্টিগ্রেট করা সম্ভব]</i></p>
-                        </div>
-                    </body>
-                    </html>
-                    """
-                    self.wfile.write(html_content.encode("utf-8"))
-            else:
-                self.send_response(404)
-                self.send_header("Content-type", "text/html; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(
-                    "<h2>❌ ভুল বা অকার্যকর লিংক! (Invalid Link)</h2>".encode(
-                        "utf-8"
-                    )
-                )
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, format, *args):
-        return  # Disable console logging for requests
-
-
-def start_server():
-    server = HTTPServer((HOST, PORT), TerminalHTTPHandler)
-    server.serve_forever()
-
-
-# Main CLI Management System
-def create_panel():
-    print("\n--- 🆕 নতুন প্যানেল তৈরি করুন ---")
-    username = input("ইউজারনেম দিন: ").strip()
-    password = input("পাসওয়ার্ড দিন: ").strip()
-
-    print("\nমেয়াদ নির্বাচন করুন:")
-    print("1. ১ দিন")
-    print("2. ৭ দিন (১ সপ্তাহ)")
-    print("3. ৩০ দিন (১ মাস)")
-    print("4. ৩৬৫ দিন (১ বছর)")
-    print("5. কাস্টম দিন")
-
-    choice = input("অপশন সিলেক্ট করুন (1-5): ").strip()
-    days_map = {"1": 1, "2": 7, "3": 30, "4": 365}
-
-    if choice in days_map:
-        days = days_map[choice]
-    elif choice == "5":
-        days = int(input("কত দিন চালাতে চান লিখে দিন: ").strip())
-    else:
-        days = 1
-
-    storage = input("স্টোরেজ লিমিট দিন (GB): ").strip()
-
-    token = secrets.token_hex(8)
-    created_at = datetime.now()
-    expiry_date = created_at + timedelta(days=days)
-
-    panel_info = {
-        "username": username,
-        "password": password,
-        "storage": storage,
-        "created_at": created_at.strftime("%Y-%m-%d %H:%M:%S"),
-        "expiry": expiry_date.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-
-    panels = load_data()
-    panels[token] = panel_info
-    save_data(panels)
-
-    link = f"http://localhost:{PORT}/terminal/{token}"
-    print("\n✅ প্যানেল সফলভাবে তৈরি হয়েছে!")
-    print(f"🔗 টার্মিনাল লিংক: {link}")
-    print(f"⏳ মেয়াদের শেষ তারিখ: {panel_info['expiry']}\n")
-
-
-def view_old_panels():
-    panels = load_data()
-    if not panels:
-        print("\n❌ কোনো সংরক্ষিত প্যানেল পাওয়া যায়নি।\n")
-        return
-
-    print("\n--- 📂 সংরক্ষিত প্যানেলের তালিকা ---")
-    tokens = list(panels.keys())
-    for idx, token in enumerate(tokens, 1):
-        info = panels[token]
-        expiry = datetime.strptime(info["expiry"], "%Y-%m-%d %H:%M:%S")
-        status = (
-            "✅ Active" if datetime.now() < expiry else "❌ Expired"
-        )
-        print(
-            f"{idx}. User: {info['username']} | Storage: {info['storage']}GB | Expiry: {info['expiry']} [{status}]"
-        )
-
-    print("\n1. প্যানেলের মেয়াদ বাড়ান")
-    print("2. প্যানেল মুছে ফেলুন (Delete)")
-    print("3. মূল মেনুতে ফিরে যান")
-
-    action = input("অপশন বেছে নিন: ").strip()
-
-    if action in ["1", "2"]:
-        selected = int(input("প্যানেল নম্বরটি নির্বাচন করুন: ")) - 1
-        if 0 <= selected < len(tokens):
-            target_token = tokens[selected]
-
-            if action == "1":
-                add_days = int(
-                    input("কত দিন মেয়াদ বাড়াতে চান?: ").strip()
-                )
-                curr_expiry = datetime.strptime(
-                    panels[target_token]["expiry"], "%Y-%m-%d %H:%M:%S"
-                )
-                new_expiry = (
-                    curr_expiry
-                    if curr_expiry > datetime.now()
-                    else datetime.now()
-                ) + timedelta(days=add_days)
-                panels[target_token]["expiry"] = new_expiry.strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-                save_data(panels)
-                print("✅ প্যানেলের মেয়াদ আপডেট করা হয়েছে!")
-
-            elif action == "2":
-                del panels[target_token]
-                save_data(panels)
-                print("🗑️ প্যানেল মুছে ফেলা হয়েছে!")
-
-
-def main_menu():
-    threading.Thread(target=start_server, daemon=True).start()
-    print(
-        f"🚀 সিস্টেম ব্যাকগ্রাউন্ড সার্ভার চালু হয়েছে (Port: {PORT})...\n"
-    )
+    entity = await client.get_entity(TARGET_CHANNEL)
+    channel_peer = await client.get_input_entity(entity)
+    unmuted_users = set()
 
     while True:
-        print("=============================")
-        print("    PANEL MANAGEMENT SYSTEM  ")
-        print("=============================")
-        print("1. New Panel Create")
-        print("2. Old Data / Old Panel")
-        print("3. Exit")
+        try:
+            # ১. চ্যানেলের কল চেক করা
+            full_chat = await client(GetFullChannelRequest(channel=channel_peer))
+            call = full_chat.full_chat.call
 
-        choice = input("\nপছন্দমত অপশন বেছে নিন (1-3): ").strip()
+            # ২. লাইভ না থাকলে চালু করা
+            if not call:
+                print(">> লাইভ তৈরি করা হচ্ছে...")
+                try:
+                    await client(CreateGroupCallRequest(
+                        peer=channel_peer,
+                        random_id=random.randint(10000, 99999999)
+                    ))
+                    await asyncio.sleep(2)
+                    full_chat_updated = await client(GetFullChannelRequest(channel=channel_peer))
+                    call = full_chat_updated.full_chat.call
+                    unmuted_users.clear()
+                    print(">> লাইভ সফলভাবে শুরু হয়েছে!")
+                except FloodWaitError as fe:
+                    print(f">> টেলিগ্রাম রেট লিমিট: {fe.seconds} সেকেন্ড অপেক্ষা করতে হবে...")
+                    await asyncio.sleep(fe.seconds + 2)
+                    continue
+                except Exception as e:
+                    print(f">> লাইভ চালু করতে সমস্যা: {e}")
+                    await asyncio.sleep(5)
+                    continue
 
-        if choice == "1":
-            create_panel()
-        elif choice == "2":
-            view_old_panels()
-        elif choice == "3":
-            print("প্রোগ্রামটি বন্ধ করা হচ্ছে...")
+            call_input = InputGroupCall(id=call.id, access_hash=call.access_hash)
+
+            # ৩. লাইভে স্থায়ীভাবে জয়েন করা
+            print(">> লাইভে জয়েন করা হচ্ছে...")
+            joined = await join_live(call_input)
+            if joined:
+                print(">> আইডি লাইভে দৃশ্যমান আছে এবং সক্রিয় রাখা হয়েছে।")
+
+            # ৪. অডিয়েন্স আনমিউট এবং হার্টবিট পিং লুপ
+            while True:
+                try:
+                    participants_data = await client(GetGroupParticipantsRequest(
+                        call=call_input,
+                        ids=[],
+                        sources=[],
+                        offset="",
+                        limit=100
+                    ))
+
+                    users_dict = {u.id: u for u in getattr(participants_data, 'users', [])}
+
+                    for p in participants_data.participants:
+                        if isinstance(p.peer, PeerUser) and p.peer.user_id == me.id:
+                            continue
+
+                        user_key = getattr(p, 'source', None) or (p.peer.user_id if isinstance(p.peer, PeerUser) else None)
+
+                        if p.muted and user_key not in unmuted_users:
+                            try:
+                                if isinstance(p.peer, PeerUser):
+                                    u = users_dict.get(p.peer.user_id)
+                                    input_user = InputPeerUser(user_id=u.id, access_hash=u.access_hash) if u else await client.get_input_entity(p.peer.user_id)
+                                else:
+                                    input_user = await client.get_input_entity(p.peer)
+
+                                await client(EditGroupCallParticipantRequest(
+                                    call=call_input,
+                                    participant=input_user,
+                                    muted=False
+                                ))
+                                unmuted_users.add(user_key)
+                                print(f">> মেম্বার আনমিউট হয়েছে: {getattr(p.peer, 'user_id', p.peer)}")
+                            except FloodWaitError as fwe:
+                                await asyncio.sleep(fwe.seconds + 1)
+                            except Exception:
+                                pass
+
+                    await asyncio.sleep(3)
+
+                except FloodWaitError as e:
+                    await asyncio.sleep(e.seconds + 2)
+                except Exception:
+                    print(">> পুনরায় লাইভে রি-কানেক্ট করা হচ্ছে...")
+                    await join_live(call_input)
+                    await asyncio.sleep(3)
+
+        except KeyboardInterrupt:
+            print("\n>> স্ক্রিপ্ট বন্ধ করা হচ্ছে...")
+            try:
+                if call:
+                    call_input = InputGroupCall(id=call.id, access_hash=call.access_hash)
+                    await client(LeaveGroupCallRequest(call=call_input))
+                    await client(DiscardGroupCallRequest(call=call_input))
+                print(">> লাইভ বন্ধ করা হয়েছে।")
+            except Exception:
+                pass
             break
-        else:
-            print("❌ ভুল ইনপুট, আবার চেষ্টা করুন।\n")
-
+        except Exception as err:
+            print(f">> ত্রুটি: {err}")
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    main_menu()
+    with client:
+        client.loop.run_until_complete(main())
