@@ -1,3 +1,15 @@
+import sys
+import subprocess
+
+# ১. প্রয়োজনীয় প্যাকেজ অটো-ইনস্টল চেকার
+required_packages = ["telethon"]
+for package in required_packages:
+    try:
+        __import__(package)
+    except ImportError:
+        print(f">> প্যাকেজ পাওয়া যায়নি, ইনস্টল করা হচ্ছে: {package}...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
 import asyncio
 import json
 import random
@@ -16,7 +28,7 @@ from telethon.tl.functions.phone import (
 )
 from telethon.tl.types import InputGroupCall, DataJSON, InputPeerUser, PeerUser
 
-# ক্রেডেনশিয়াল ও সেশন টোকেন
+# ক্রেডেনশিয়াল
 API_ID = 32054831
 API_HASH = "89fc23d0ff6763a53004996fe0c6cab2"
 SESSION_STRING = "1BVtsOMMBu1WGKCnjA_joyvpHQy2oQ3Y9P0Ncgf8JM7OtAkvKxMTPljd1Sg-viJEMP9rPKZynCFNcI5tbaKL25zRHAneu4rcPCC89ninLD0GnYqY35MsFaT-beg9mIrJBiGqiBznlKs4RNwZHMesqMhryDEpNZRa48pzCUUihR05tcJr5L07ooNhPIOPjYC8sSWYa1SNpO68XgeCtbwoJ31EoQvEPP4FcSuDZoLZvaEasK_UV89hf-QZir-x1aPrtfjcmaY2VtutW8Wql5xK-QocrxmopEN4iY_5hxW43YNmC4BY-4p88FfBfQuPWZD3ivs-5Pd1nV5lKwhnRto1Ukp36FMcsrGc="
@@ -25,6 +37,7 @@ TARGET_CHANNEL = "DARK67HACK"
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 def make_sdp():
+    """টেলিগ্রামের ফুল অডিও SDP পে-লোড"""
     s  = random.randint(100000000, 4294967295)
     s2 = random.randint(100000000, 4294967295)
     fp = ':'.join(f'{random.randint(0,255):02X}' for _ in range(32))
@@ -39,14 +52,13 @@ def make_sdp():
         "sources": {str(s): {"cname": cn, "msid": f"{ms} {ms}a0"}},
     })
 
-async def join_live(call_input):
-    me = await client.get_me()
-    join_as = await client.get_input_entity(me)
+async def robust_join(call_input, join_peer):
+    """লাইভে যুক্ত হওয়া এবং এরর হ্যান্ডলিং"""
     for _ in range(3):
         try:
             await client(JoinGroupCallRequest(
                 call=call_input,
-                join_as=join_as,
+                join_as=join_peer,
                 muted=False,
                 video_stopped=True,
                 params=DataJSON(data=make_sdp())
@@ -61,19 +73,21 @@ async def join_live(call_input):
 async def main():
     await client.start()
     me = await client.get_me()
-    print(f">> স্ট্রিং টোকেন দিয়ে লগইন সফল: {me.first_name} (ID: {me.id})")
+    print(f">> অ্যাকাউন্টে সফলভাবে কানেক্ট হয়েছে: {me.first_name}")
 
     entity = await client.get_entity(TARGET_CHANNEL)
     channel_peer = await client.get_input_entity(entity)
+    user_peer = await client.get_input_entity(me)
+
     unmuted_users = set()
 
+    # মূল 24/7 লাইভ কন্ট্রোল লুপ
     while True:
         try:
-            # ১. চ্যানেলের কল চেক করা
+            # ১. লাইভ স্ট্যাটাস চেক ও অটো-স্টার্ট
             full_chat = await client(GetFullChannelRequest(channel=channel_peer))
             call = full_chat.full_chat.call
 
-            # ২. লাইভ না থাকলে চালু করা
             if not call:
                 print(">> লাইভ তৈরি করা হচ্ছে...")
                 try:
@@ -85,25 +99,25 @@ async def main():
                     full_chat_updated = await client(GetFullChannelRequest(channel=channel_peer))
                     call = full_chat_updated.full_chat.call
                     unmuted_users.clear()
-                    print(">> লাইভ সফলভাবে শুরু হয়েছে!")
+                    print(">> লাইভ সফলভাবে চালু হয়েছে!")
                 except FloodWaitError as fe:
                     print(f">> টেলিগ্রাম রেট লিমিট: {fe.seconds} সেকেন্ড অপেক্ষা করতে হবে...")
                     await asyncio.sleep(fe.seconds + 2)
                     continue
                 except Exception as e:
                     print(f">> লাইভ চালু করতে সমস্যা: {e}")
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(4)
                     continue
 
             call_input = InputGroupCall(id=call.id, access_hash=call.access_hash)
 
-            # ৩. লাইভে স্থায়ীভাবে জয়েন করা
-            print(">> লাইভে জয়েন করা হচ্ছে...")
-            joined = await join_live(call_input)
+            # ২. লাইভে প্রথমবার জয়েন করা
+            print(">> লাইভের ভেতর স্থায়ীভাবে জয়েন করা হচ্ছে...")
+            joined = await robust_join(call_input, user_peer)
             if joined:
-                print(">> আইডি লাইভে দৃশ্যমান আছে এবং সক্রিয় রাখা হয়েছে।")
+                print(">> আইডি সফলভাবে লাইভে প্রবেশ করেছে এবং সার্বক্ষণিক গার্ড চালু আছে।")
 
-            # ৪. অডিয়েন্স আনমিউট এবং হার্টবিট পিং লুপ
+            # ৩. লাইভে বসে থাকা, ড্রপ হলে রি-জয়েন এবং অটো-আনমিউট লুপ
             while True:
                 try:
                     participants_data = await client(GetGroupParticipantsRequest(
@@ -115,13 +129,18 @@ async def main():
                     ))
 
                     users_dict = {u.id: u for u in getattr(participants_data, 'users', [])}
+                    is_me_present = False
 
                     for p in participants_data.participants:
+                        # নিজে লাইভে আছে কিনা যাচাই
                         if isinstance(p.peer, PeerUser) and p.peer.user_id == me.id:
+                            if not p.left:
+                                is_me_present = True
                             continue
 
                         user_key = getattr(p, 'source', None) or (p.peer.user_id if isinstance(p.peer, PeerUser) else None)
 
+                        # নতুন ইউজারকে আনমিউট করা
                         if p.muted and user_key not in unmuted_users:
                             try:
                                 if isinstance(p.peer, PeerUser):
@@ -142,14 +161,20 @@ async def main():
                             except Exception:
                                 pass
 
-                    await asyncio.sleep(3)
+                    # কোনো কারণে আইডি লাইভ থেকে ছিটকে গেলে তাৎক্ষণিক রি-জয়েন
+                    if not is_me_present:
+                        print(">> আইডি ড্রপ লক্ষ্য করা গেছে! সাথে সাথে লাইভে পুনরায় রি-জয়েন করা হচ্ছে...")
+                        await robust_join(call_input, user_peer)
+
+                    await asyncio.sleep(2)
 
                 except FloodWaitError as e:
-                    await asyncio.sleep(e.seconds + 2)
+                    await asyncio.sleep(e.seconds + 1)
                 except Exception:
-                    print(">> পুনরায় লাইভে রি-কানেক্ট করা হচ্ছে...")
-                    await join_live(call_input)
+                    # কলটি যদি বন্ধ হয়ে গিয়ে থাকে বা নেটওয়ার্ক বিচ্ছিন্ন হয়
+                    print(">> লাইভ সেশন চেক করা হচ্ছে...")
                     await asyncio.sleep(3)
+                    break
 
         except KeyboardInterrupt:
             print("\n>> স্ক্রিপ্ট বন্ধ করা হচ্ছে...")
@@ -164,7 +189,7 @@ async def main():
             break
         except Exception as err:
             print(f">> ত্রুটি: {err}")
-            await asyncio.sleep(5)
+            await asyncio.sleep(4)
 
 if __name__ == "__main__":
     with client:
