@@ -1,14 +1,12 @@
 import sys
 import subprocess
 
-# ১. প্রয়োজনীয় প্যাকেজ অটো-ইনস্টল চেকার
-required_packages = ["telethon"]
-for package in required_packages:
-    try:
-        __import__(package)
-    except ImportError:
-        print(f">> প্যাকেজ পাওয়া যায়নি, ইনস্টল করা হচ্ছে: {package}...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+# ১. প্রয়োজনীয় লাইব্রেরি অটো-চেকার ও ইনস্টলার
+try:
+    import telethon
+except ImportError:
+    print(">> Telethon লাইব্রেরি ইনস্টল করা হচ্ছে...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "telethon"])
 
 import asyncio
 import json
@@ -18,17 +16,15 @@ from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.functions.phone import (
-    CreateGroupCallRequest,
     JoinGroupCallRequest,
     GetGroupCallRequest,
     GetGroupParticipantsRequest,
     EditGroupCallParticipantRequest,
-    DiscardGroupCallRequest,
     LeaveGroupCallRequest
 )
-from telethon.tl.types import InputGroupCall, DataJSON, InputPeerUser, PeerUser
+from telethon.tl.types import InputGroupCall, DataJSON, InputPeerUser, PeerUser, PeerChannel
 
-# ক্রেডেনশিয়াল
+# ক্রেডেনশিয়াল
 API_ID = 32054831
 API_HASH = "89fc23d0ff6763a53004996fe0c6cab2"
 SESSION_STRING = "1BVtsOMMBu1WGKCnjA_joyvpHQy2oQ3Y9P0Ncgf8JM7OtAkvKxMTPljd1Sg-viJEMP9rPKZynCFNcI5tbaKL25zRHAneu4rcPCC89ninLD0GnYqY35MsFaT-beg9mIrJBiGqiBznlKs4RNwZHMesqMhryDEpNZRa48pzCUUihR05tcJr5L07ooNhPIOPjYC8sSWYa1SNpO68XgeCtbwoJ31EoQvEPP4FcSuDZoLZvaEasK_UV89hf-QZir-x1aPrtfjcmaY2VtutW8Wql5xK-QocrxmopEN4iY_5hxW43YNmC4BY-4p88FfBfQuPWZD3ivs-5Pd1nV5lKwhnRto1Ukp36FMcsrGc="
@@ -52,8 +48,8 @@ def make_sdp():
         "sources": {str(s): {"cname": cn, "msid": f"{ms} {ms}a0"}},
     })
 
-async def robust_join(call_input, join_peer):
-    """লাইভে যুক্ত হওয়া এবং এরর হ্যান্ডলিং"""
+async def join_live_call(call_input, join_peer):
+    """লাইভে হোস্ট/পার্টিসিপেন্ট হিসেবে জয়েন করা"""
     for _ in range(3):
         try:
             await client(JoinGroupCallRequest(
@@ -73,51 +69,42 @@ async def robust_join(call_input, join_peer):
 async def main():
     await client.start()
     me = await client.get_me()
-    print(f">> অ্যাকাউন্টে সফলভাবে কানেক্ট হয়েছে: {me.first_name}")
+    print(f">> অ্যাকাউন্টে লগইন সফল: {me.first_name}")
 
     entity = await client.get_entity(TARGET_CHANNEL)
     channel_peer = await client.get_input_entity(entity)
     user_peer = await client.get_input_entity(me)
 
-    unmuted_users = set()
+    print(f">> চ্যানেল [{TARGET_CHANNEL}] মনিটরিং শুরু হয়েছে...")
+    print(">> লাইভ শুরু হওয়া মাত্রই স্বয়ংক্রিয়ভাবে জয়েন করা হবে।\n")
 
-    # মূল 24/7 লাইভ কন্ট্রোল লুপ
     while True:
         try:
-            # ১. লাইভ স্ট্যাটাস চেক ও অটো-স্টার্ট
+            # ১. চ্যানেলের লাইভ স্ট্যাটাস চেক করা
             full_chat = await client(GetFullChannelRequest(channel=channel_peer))
             call = full_chat.full_chat.call
 
+            # লাইভ না থাকলে অপেক্ষা করা (নিজে থেকে লাইভ স্টার্ট করবে না)
             if not call:
-                print(">> লাইভ তৈরি করা হচ্ছে...")
-                try:
-                    await client(CreateGroupCallRequest(
-                        peer=channel_peer,
-                        random_id=random.randint(10000, 99999999)
-                    ))
-                    await asyncio.sleep(2)
-                    full_chat_updated = await client(GetFullChannelRequest(channel=channel_peer))
-                    call = full_chat_updated.full_chat.call
-                    unmuted_users.clear()
-                    print(">> লাইভ সফলভাবে চালু হয়েছে!")
-                except FloodWaitError as fe:
-                    print(f">> টেলিগ্রাম রেট লিমিট: {fe.seconds} সেকেন্ড অপেক্ষা করতে হবে...")
-                    await asyncio.sleep(fe.seconds + 2)
-                    continue
-                except Exception as e:
-                    print(f">> লাইভ চালু করতে সমস্যা: {e}")
-                    await asyncio.sleep(4)
-                    continue
+                await asyncio.sleep(4)
+                continue
 
+            print("🟢 লাইভ স্ট্রিম শনাক্ত হয়েছে! জয়েন করার প্রস্তুতি নেওয়া হচ্ছে...")
             call_input = InputGroupCall(id=call.id, access_hash=call.access_hash)
 
-            # ২. লাইভে প্রথমবার জয়েন করা
-            print(">> লাইভের ভেতর স্থায়ীভাবে জয়েন করা হচ্ছে...")
-            joined = await robust_join(call_input, user_peer)
-            if joined:
-                print(">> আইডি সফলভাবে লাইভে প্রবেশ করেছে এবং সার্বক্ষণিক গার্ড চালু আছে।")
+            # ২. হাইড হওয়া এড়াতে চ্যানেল হিসেবে জয়েনের চেষ্টা (না হলে ইউজার প্রোফাইল)
+            joined = await join_live_call(call_input, channel_peer)
+            active_peer = channel_peer
+            if not joined:
+                joined = await join_live_call(call_input, user_peer)
+                active_peer = user_peer
 
-            # ৩. লাইভে বসে থাকা, ড্রপ হলে রি-জয়েন এবং অটো-আনমিউট লুপ
+            if joined:
+                print("✅ লাইভে সফলভাবে জয়েন করা হয়েছে এবং সক্রিয় রাখা হয়েছে!")
+
+            unmuted_users = set()
+
+            # ৩. লাইভে বসে থাকা এবং অটো-আনমিউট লুপ
             while True:
                 try:
                     participants_data = await client(GetGroupParticipantsRequest(
@@ -129,18 +116,22 @@ async def main():
                     ))
 
                     users_dict = {u.id: u for u in getattr(participants_data, 'users', [])}
-                    is_me_present = False
+                    is_still_in_call = False
 
                     for p in participants_data.participants:
-                        # নিজে লাইভে আছে কিনা যাচাই
+                        # নিজে লাইভে আছে কিনা পর্যবেক্ষণ
                         if isinstance(p.peer, PeerUser) and p.peer.user_id == me.id:
                             if not p.left:
-                                is_me_present = True
+                                is_still_in_call = True
+                            continue
+                        elif isinstance(p.peer, PeerChannel) and p.peer.channel_id == entity.id:
+                            if not p.left:
+                                is_still_in_call = True
                             continue
 
                         user_key = getattr(p, 'source', None) or (p.peer.user_id if isinstance(p.peer, PeerUser) else None)
 
-                        # নতুন ইউজারকে আনমিউট করা
+                        # নতুন ইউজার মিউটেড অবস্থায় আসলে আনমিউট করা
                         if p.muted and user_key not in unmuted_users:
                             try:
                                 if isinstance(p.peer, PeerUser):
@@ -155,40 +146,30 @@ async def main():
                                     muted=False
                                 ))
                                 unmuted_users.add(user_key)
-                                print(f">> মেম্বার আনমিউট হয়েছে: {getattr(p.peer, 'user_id', p.peer)}")
+                                print(f"🔊 ইউজার আনমিউট করা হয়েছে: {getattr(p.peer, 'user_id', p.peer)}")
                             except FloodWaitError as fwe:
                                 await asyncio.sleep(fwe.seconds + 1)
                             except Exception:
                                 pass
 
-                    # কোনো কারণে আইডি লাইভ থেকে ছিটকে গেলে তাৎক্ষণিক রি-জয়েন
-                    if not is_me_present:
-                        print(">> আইডি ড্রপ লক্ষ্য করা গেছে! সাথে সাথে লাইভে পুনরায় রি-জয়েন করা হচ্ছে...")
-                        await robust_join(call_input, user_peer)
+                    # কোনো কারণে হাইড বা ড্রপ হলে তাৎক্ষণিক রি-কানেক্ট
+                    if not is_still_in_call:
+                        print("⚠️ লাইভে ড্রপ লক্ষ্য করা গেছে! পুনরায় রি-জয়েন করা হচ্ছে...")
+                        await join_live_call(call_input, active_peer)
 
                     await asyncio.sleep(2)
 
-                except FloodWaitError as e:
-                    await asyncio.sleep(e.seconds + 1)
+                except FloodWaitError as fe:
+                    await asyncio.sleep(fe.seconds + 1)
                 except Exception:
-                    # কলটি যদি বন্ধ হয়ে গিয়ে থাকে বা নেটওয়ার্ক বিচ্ছিন্ন হয়
-                    print(">> লাইভ সেশন চেক করা হচ্ছে...")
-                    await asyncio.sleep(3)
+                    # লাইভ বন্ধ হয়ে গেলে বা হোস্ট কল কাটলে লুপ ব্রেক হবে
+                    print("📴 লাইভ স্ট্রিম সমাপ্ত হয়েছে। পরবর্তী লাইভের জন্য অপেক্ষা করা হচ্ছে...\n")
                     break
 
         except KeyboardInterrupt:
-            print("\n>> স্ক্রিপ্ট বন্ধ করা হচ্ছে...")
-            try:
-                if call:
-                    call_input = InputGroupCall(id=call.id, access_hash=call.access_hash)
-                    await client(LeaveGroupCallRequest(call=call_input))
-                    await client(DiscardGroupCallRequest(call=call_input))
-                print(">> লাইভ বন্ধ করা হয়েছে।")
-            except Exception:
-                pass
+            print("\n>> স্ক্রিপ্ট বন্ধ করা হয়েছে।")
             break
-        except Exception as err:
-            print(f">> ত্রুটি: {err}")
+        except Exception as e:
             await asyncio.sleep(4)
 
 if __name__ == "__main__":
